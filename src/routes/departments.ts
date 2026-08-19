@@ -1,0 +1,105 @@
+import express from "express";
+import { eq, ilike, desc, sql } from "drizzle-orm";
+
+import { db } from "../db/index.js";
+import { departments, subjects } from "../db/schema/index.js";
+
+const router = express.Router();
+
+router.get("/", async (req, res) => {
+  try {
+    const { search, page = 1, limit = 10 } = req.query;
+
+    const currentPage = Math.max(1, +page);
+    const limitPerPage = Math.max(1, +limit);
+    const offset = (currentPage - 1) * limitPerPage;
+
+    const whereClause = search
+      ? ilike(departments.name, `%${search}%`)
+      : undefined;
+
+    const countResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(departments)
+      .where(whereClause);
+
+    const totalCount = countResult[0]?.count ?? 0;
+
+    const departmentsList = await db
+      .select()
+      .from(departments)
+      .where(whereClause)
+      .orderBy(desc(departments.createdAt))
+      .limit(limitPerPage)
+      .offset(offset);
+
+    res.status(200).json({
+      data: departmentsList,
+      pagination: {
+        page: currentPage,
+        limit: limitPerPage,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / limitPerPage),
+      },
+    });
+  } catch (error) {
+    console.error("GET /departments error:", error);
+    res.status(500).json({ error: "Failed to fetch departments" });
+  }
+});
+
+router.post("/", async (req, res) => {
+  try {
+    const { name, description } = req.body;
+
+    const [createdDepartment] = await db
+      .insert(departments)
+      .values({ name, description })
+      .returning({ id: departments.id });
+
+    if (!createdDepartment) throw Error;
+
+    res.status(201).json({ data: createdDepartment });
+  } catch (error) {
+    console.error("POST /departments error:", error);
+    res.status(500).json({ error: "Failed to create department" });
+  }
+});
+
+router.get("/:id", async (req, res) => {
+  try {
+    const departmentId = Number(req.params.id);
+
+    if (!Number.isFinite(departmentId)) {
+      return res.status(400).json({ error: "Invalid department id" });
+    }
+
+    const [department] = await db
+      .select()
+      .from(departments)
+      .where(eq(departments.id, departmentId));
+
+    if (!department) {
+      return res.status(404).json({ error: "Department not found" });
+    }
+
+    const subjectsCount = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(subjects)
+      .where(eq(subjects.departmentId, departmentId));
+
+    res.status(200).json({
+      data: {
+        ...department,
+        totals: {
+          subjects: subjectsCount[0]?.count ?? 0,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("GET /departments/:id error:", error);
+    res.status(500).json({ error: "Failed to fetch department details" });
+  }
+});
+
+export default router;
