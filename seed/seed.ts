@@ -2,27 +2,27 @@ import "dotenv/config";
 import { db } from "../src/db/index.js";
 import { departments } from "../src/db/schema/index.js";
 
-const DEPARTMENT_NAMES = [
-  "Computer Science",
-  "Mathematics",
-  "Physics",
-  "Chemistry",
-  "Biology",
-  "English",
-  "History",
-  "Geography",
-  "Economics",
-  "Business Administration",
-  "Engineering",
-  "Psychology",
-  "Sociology",
-  "Political Science",
-  "Philosophy",
-  "Education",
-  "Fine Arts",
-  "Music",
-  "Physical Education",
-  "Law",
+const DEPARTMENTS = [
+  { name: "Computer Science", code: "CS" },
+  { name: "Mathematics", code: "MATH" },
+  { name: "Physics", code: "PHYS" },
+  { name: "Chemistry", code: "CHEM" },
+  { name: "Biology", code: "BIO" },
+  { name: "English", code: "ENG" },
+  { name: "History", code: "HIST" },
+  { name: "Geography", code: "GEO" },
+  { name: "Economics", code: "ECON" },
+  { name: "Business Administration", code: "BUS" },
+  { name: "Engineering", code: "ENGR" },
+  { name: "Psychology", code: "PSY" },
+  { name: "Sociology", code: "SOC" },
+  { name: "Political Science", code: "POLI" },
+  { name: "Philosophy", code: "PHIL" },
+  { name: "Education", code: "EDU" },
+  { name: "Fine Arts", code: "ART" },
+  { name: "Music", code: "MUS" },
+  { name: "Physical Education", code: "PE" },
+  { name: "Law", code: "LAW" },
 ];
 
 async function main() {
@@ -30,8 +30,8 @@ async function main() {
 
   const inserted = await db
     .insert(departments)
-    .values(DEPARTMENT_NAMES.map((name) => ({ name })))
-    .onConflictDoNothing({ target: departments.name })
+    .values(DEPARTMENTS)
+    .onConflictDoNothing({ target: departments.code })
     .returning({ id: departments.id, name: departments.name });
 
   console.log(`Seeded ${inserted.length} department(s).`);
