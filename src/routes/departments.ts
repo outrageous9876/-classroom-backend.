@@ -50,17 +50,24 @@ router.get("/", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { code, name, description } = req.body;
+
+    if (!code || !name) {
+      return res.status(400).json({ error: "Code and name are required" });
+    }
 
     const [createdDepartment] = await db
       .insert(departments)
-      .values({ name, description })
+      .values({ code, name, description })
       .returning({ id: departments.id });
 
     if (!createdDepartment) throw Error;
 
     res.status(201).json({ data: createdDepartment });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "Department code already exists" });
+    }
     console.error("POST /departments error:", error);
     res.status(500).json({ error: "Failed to create department" });
   }

@@ -26,19 +26,19 @@ export const auth = betterAuth({
       clientSecret: process.env.GITHUB_CLIENT_SECRET as string,
     },
   },
-  user: {
-    additionalFields: {
-      role: {
-        type: "string",
-        required: false,
-        defaultValue: "student",
-        input: true,
-      },
-      imageCldPubId: {
-        type: "string",
-        required: false,
-        input: true,
-      },
+user: {
+  additionalFields: {
+    role: {
+      type: "string",
+      required: false,
+      defaultValue: "student",
+      input: false,  // changed from true
+    },
+    imageCldPubId: {
+      type: "string",
+      required: false,
+      input: true,
     },
   },
+},
 });
