@@ -5,12 +5,12 @@
     "lib": ["ES2022"],
 
     /* Node ESM */
-    "module": "ES2022",
-    "moduleResolution": "node",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
 
     /* Project structure */
-    "rootDir": "src",
     "outDir": "dist",
+    "rootDir": ".",
 
     /* Type safety */
     "strict": true,
@@ -30,5 +30,5 @@
     /* Environment types */
     "types": ["node"]
   },
-  "include": ["src"]
+ "include": ["src", "seed"]
 }
