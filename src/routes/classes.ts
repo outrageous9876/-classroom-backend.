@@ -84,8 +84,10 @@ router.post("/", async (req, res) => {
       bannerUrl,
       bannerCldPubId,
       schedules,
-      inviteCode,
     } = req.body;
+
+    // Generate a random 6-character invite code
+    const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
 
     const [createdClass] = await db
       .insert(classes)
@@ -98,7 +100,7 @@ router.post("/", async (req, res) => {
         capacity,
         bannerUrl,
         bannerCldPubId,
-        schedules,
+        schedules: schedules ?? [],
         inviteCode,
       })
       .returning({ id: classes.id });
@@ -106,7 +108,12 @@ router.post("/", async (req, res) => {
     if (!createdClass) throw Error;
 
     res.status(201).json({ data: createdClass });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.code === "23505") {
+      return res
+        .status(409)
+        .json({ error: "Invite code collision, please try again" });
+    }
     console.error("POST /classes error:", error);
     res.status(500).json({ error: "Failed to create class" });
   }
