@@ -154,19 +154,33 @@ router.get("/:id/classes", async (req, res) => {
 
     const totalCount = countResult[0]?.count ?? 0;
 
-    const classesList = await db
-      .select({
-        ...getTableColumns(classes),
-        teacher: {
-          ...getTableColumns(user),
-        },
-      })
-      .from(classes)
-      .leftJoin(user, eq(classes.teacherId, user.id))
-      .where(eq(classes.subjectId, subjectId))
-      .orderBy(desc(classes.createdAt))
-      .limit(limitPerPage)
-      .offset(offset);
+   const classesList = await db
+  .select({
+    id: classes.id,
+    subjectId: classes.subjectId,
+    teacherId: classes.teacherId,
+    name: classes.name,
+    description: classes.description,
+    status: classes.status,
+    capacity: classes.capacity,
+    bannerUrl: classes.bannerUrl,
+    bannerCldPubId: classes.bannerCldPubId,
+    schedules: classes.schedules,
+    createdAt: classes.createdAt,
+    updatedAt: classes.updatedAt,
+    teacher: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      image: user.image,
+    },
+  })
+  .from(classes)
+  .leftJoin(user, eq(classes.teacherId, user.id))
+  .where(eq(classes.subjectId, subjectId))
+  .orderBy(desc(classes.createdAt))
+  .limit(limitPerPage)
+  .offset(offset);
 
     res.status(200).json({
       data: classesList,
