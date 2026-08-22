@@ -1,10 +1,29 @@
 import express from "express";
-import { eq, ilike, and, desc, sql, getTableColumns } from "drizzle-orm";
+import { randomInt } from "node:crypto";
+import { eq, ilike, and, desc, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { classes, subjects, user, enrollments } from "../db/schema/index.js";
 
 const router = express.Router();
+
+// Explicit projection for classes — excludes inviteCode from public responses.
+// inviteCode is only meant to be known by the teacher who created the class
+// and shared manually with students; it must never be exposed via list/detail APIs.
+const publicClassColumns = {
+  id: classes.id,
+  subjectId: classes.subjectId,
+  teacherId: classes.teacherId,
+  name: classes.name,
+  description: classes.description,
+  status: classes.status,
+  capacity: classes.capacity,
+  bannerUrl: classes.bannerUrl,
+  bannerCldPubId: classes.bannerCldPubId,
+  schedules: classes.schedules,
+  createdAt: classes.createdAt,
+  updatedAt: classes.updatedAt,
+};
 
 router.get("/", async (req, res) => {
   try {
@@ -40,8 +59,8 @@ router.get("/", async (req, res) => {
 
     const classesList = await db
       .select({
-        ...getTableColumns(classes),
-        subject: { ...getTableColumns(subjects) },
+        ...publicClassColumns,
+        subject: { ...getSubjectColumns() },
         teacher: {
           id: user.id,
           name: user.name,
@@ -72,6 +91,27 @@ router.get("/", async (req, res) => {
   }
 });
 
+const MAX_INVITE_CODE_ATTEMPTS = 5;
+const INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I to avoid ambiguity
+const INVITE_CODE_LENGTH = 6;
+
+// Cryptographically secure, fixed-width invite code — this is an access
+// credential, so Math.random() (predictable, variable-length) is not
+// acceptable here.
+function generateInviteCode() {
+  let code = "";
+  for (let i = 0; i < INVITE_CODE_LENGTH; i++) {
+    code += INVITE_CODE_ALPHABET[randomInt(INVITE_CODE_ALPHABET.length)];
+  }
+  return code;
+}
+
+function isUniqueViolation(error: any): boolean {
+  // Drizzle wraps the real Postgres error inside `cause`, so check both
+  // the top-level code and error.cause.code to be safe across versions.
+  return error?.code === "23505" || error?.cause?.code === "23505";
+}
+
 router.post("/", async (req, res) => {
   try {
     const {
@@ -84,27 +124,53 @@ router.post("/", async (req, res) => {
       bannerUrl,
       bannerCldPubId,
       schedules,
-      inviteCode,
     } = req.body;
 
-    const [createdClass] = await db
-      .insert(classes)
-      .values({
-        subjectId,
-        teacherId,
-        name,
-        description,
-        status,
-        capacity,
-        bannerUrl,
-        bannerCldPubId,
-        schedules,
-        inviteCode,
-      })
-      .returning({ id: classes.id });
+    let createdClass;
+    let lastError;
 
-    if (!createdClass) throw Error;
+    // Retry on invite code collisions — the client never sees or controls
+    // the code, so a collision should be resolved internally, not surfaced
+    // as a failure to create the class.
+    for (let attempt = 0; attempt < MAX_INVITE_CODE_ATTEMPTS; attempt++) {
+      try {
+        [createdClass] = await db
+          .insert(classes)
+          .values({
+            subjectId,
+            teacherId,
+            name,
+            description,
+            status,
+            capacity,
+            bannerUrl,
+            bannerCldPubId,
+            schedules: schedules ?? [],
+            inviteCode: generateInviteCode(),
+          })
+          .returning({ id: classes.id, inviteCode: classes.inviteCode });
 
+        lastError = undefined;
+        break;
+      } catch (error: any) {
+        if (isUniqueViolation(error)) {
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (lastError) {
+      return res.status(409).json({
+        error: "Could not generate a unique invite code, please try again",
+      });
+    }
+
+    if (!createdClass) throw new Error("Class creation returned no result");
+
+    // The invite code is returned only here, to the creator, right after
+    // creation — it is never included in list/detail responses.
     res.status(201).json({ data: createdClass });
   } catch (error) {
     console.error("POST /classes error:", error);
@@ -122,8 +188,8 @@ router.get("/:id", async (req, res) => {
 
     const [classDetails] = await db
       .select({
-        ...getTableColumns(classes),
-        subject: { ...getTableColumns(subjects) },
+        ...publicClassColumns,
+        subject: { ...getSubjectColumns() },
         teacher: {
           id: user.id,
           name: user.name,
@@ -158,5 +224,17 @@ router.get("/:id", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch class details" });
   }
 });
+
+function getSubjectColumns() {
+  return {
+    id: subjects.id,
+    departmentId: subjects.departmentId,
+    name: subjects.name,
+    code: subjects.code,
+    description: subjects.description,
+    createdAt: subjects.createdAt,
+    updatedAt: subjects.updatedAt,
+  };
+}
 
 export default router;

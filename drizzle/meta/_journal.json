@@ -8,6 +8,13 @@
       "when": 1787163147295,
       "tag": "0000_aspiring_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787245762273,
+      "tag": "0001_quick_leopardon",
+      "breakpoints": true
     }
   ]
 }
