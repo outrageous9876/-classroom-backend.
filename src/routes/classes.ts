@@ -1,4 +1,5 @@
 import express from "express";
+import { randomInt } from "node:crypto";
 import { eq, ilike, and, desc, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
@@ -91,9 +92,24 @@ router.get("/", async (req, res) => {
 });
 
 const MAX_INVITE_CODE_ATTEMPTS = 5;
+const INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I to avoid ambiguity
+const INVITE_CODE_LENGTH = 6;
 
+// Cryptographically secure, fixed-width invite code — this is an access
+// credential, so Math.random() (predictable, variable-length) is not
+// acceptable here.
 function generateInviteCode() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
+  let code = "";
+  for (let i = 0; i < INVITE_CODE_LENGTH; i++) {
+    code += INVITE_CODE_ALPHABET[randomInt(INVITE_CODE_ALPHABET.length)];
+  }
+  return code;
+}
+
+function isUniqueViolation(error: any): boolean {
+  // Drizzle wraps the real Postgres error inside `cause`, so check both
+  // the top-level code and error.cause.code to be safe across versions.
+  return error?.code === "23505" || error?.cause?.code === "23505";
 }
 
 router.post("/", async (req, res) => {
@@ -132,12 +148,12 @@ router.post("/", async (req, res) => {
             schedules: schedules ?? [],
             inviteCode: generateInviteCode(),
           })
-          .returning({ id: classes.id });
+          .returning({ id: classes.id, inviteCode: classes.inviteCode });
 
         lastError = undefined;
         break;
       } catch (error: any) {
-        if (error.code === "23505") {
+        if (isUniqueViolation(error)) {
           lastError = error;
           continue;
         }
@@ -153,6 +169,8 @@ router.post("/", async (req, res) => {
 
     if (!createdClass) throw new Error("Class creation returned no result");
 
+    // The invite code is returned only here, to the creator, right after
+    // creation — it is never included in list/detail responses.
     res.status(201).json({ data: createdClass });
   } catch (error) {
     console.error("POST /classes error:", error);
