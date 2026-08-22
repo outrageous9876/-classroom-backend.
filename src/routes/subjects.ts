@@ -121,7 +121,7 @@ router.get("/:id", async (req, res) => {
 
     res.status(200).json({
       data: {
-        subject,
+        ...subject,
         totals: {
           classes: classesCount[0]?.count ?? 0,
         },

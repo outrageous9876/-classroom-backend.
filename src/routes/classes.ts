@@ -225,6 +225,54 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+// Update a class. Only fields that make sense to edit after creation are
+// accepted — subjectId, teacherId, and inviteCode are intentionally NOT
+// editable here (changing the teacher/subject of an existing class with
+// enrollments would be a much bigger operation than a simple field edit).
+router.patch("/:id", async (req, res) => {
+    try {
+    const classId = Number(req.params.id);
+
+    if (!Number.isFinite(classId)) {
+      return res.status(400).json({ error: "Invalid class id" });
+    }
+
+    const {
+      name,
+      description,
+      status,
+      capacity,
+      bannerUrl,
+      bannerCldPubId,
+      schedules,
+    } = req.body;
+
+    const [updatedClass] = await db
+      .update(classes)
+      .set({
+        name,
+        description,
+        status,
+        capacity,
+        bannerUrl,
+        bannerCldPubId,
+        schedules,
+        updatedAt: new Date(),
+      })
+      .where(eq(classes.id, classId))
+      .returning({ id: classes.id });
+
+    if (!updatedClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    res.status(200).json({ data: updatedClass });
+  } catch (error) {
+    console.error("PUT /classes/:id error:", error);
+    res.status(500).json({ error: "Failed to update class" });
+  }
+});
+
 function getSubjectColumns() {
   return {
     id: subjects.id,
