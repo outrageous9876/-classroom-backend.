@@ -1,10 +1,28 @@
 import express from "express";
-import { eq, ilike, and, desc, sql, getTableColumns } from "drizzle-orm";
+import { eq, ilike, and, desc, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { classes, subjects, user, enrollments } from "../db/schema/index.js";
 
 const router = express.Router();
+
+// Explicit projection for classes — excludes inviteCode from public responses.
+// inviteCode is only meant to be known by the teacher who created the class
+// and shared manually with students; it must never be exposed via list/detail APIs.
+const publicClassColumns = {
+  id: classes.id,
+  subjectId: classes.subjectId,
+  teacherId: classes.teacherId,
+  name: classes.name,
+  description: classes.description,
+  status: classes.status,
+  capacity: classes.capacity,
+  bannerUrl: classes.bannerUrl,
+  bannerCldPubId: classes.bannerCldPubId,
+  schedules: classes.schedules,
+  createdAt: classes.createdAt,
+  updatedAt: classes.updatedAt,
+};
 
 router.get("/", async (req, res) => {
   try {
@@ -40,8 +58,8 @@ router.get("/", async (req, res) => {
 
     const classesList = await db
       .select({
-        ...getTableColumns(classes),
-        subject: { ...getTableColumns(subjects) },
+        ...publicClassColumns,
+        subject: { ...getSubjectColumns() },
         teacher: {
           id: user.id,
           name: user.name,
@@ -72,6 +90,12 @@ router.get("/", async (req, res) => {
   }
 });
 
+const MAX_INVITE_CODE_ATTEMPTS = 5;
+
+function generateInviteCode() {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
 router.post("/", async (req, res) => {
   try {
     const {
@@ -86,34 +110,51 @@ router.post("/", async (req, res) => {
       schedules,
     } = req.body;
 
-    // Generate a random 6-character invite code
-    const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    let createdClass;
+    let lastError;
 
-    const [createdClass] = await db
-      .insert(classes)
-      .values({
-        subjectId,
-        teacherId,
-        name,
-        description,
-        status,
-        capacity,
-        bannerUrl,
-        bannerCldPubId,
-        schedules: schedules ?? [],
-        inviteCode,
-      })
-      .returning({ id: classes.id });
+    // Retry on invite code collisions — the client never sees or controls
+    // the code, so a collision should be resolved internally, not surfaced
+    // as a failure to create the class.
+    for (let attempt = 0; attempt < MAX_INVITE_CODE_ATTEMPTS; attempt++) {
+      try {
+        [createdClass] = await db
+          .insert(classes)
+          .values({
+            subjectId,
+            teacherId,
+            name,
+            description,
+            status,
+            capacity,
+            bannerUrl,
+            bannerCldPubId,
+            schedules: schedules ?? [],
+            inviteCode: generateInviteCode(),
+          })
+          .returning({ id: classes.id });
 
-    if (!createdClass) throw Error;
+        lastError = undefined;
+        break;
+      } catch (error: any) {
+        if (error.code === "23505") {
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (lastError) {
+      return res.status(409).json({
+        error: "Could not generate a unique invite code, please try again",
+      });
+    }
+
+    if (!createdClass) throw new Error("Class creation returned no result");
 
     res.status(201).json({ data: createdClass });
-  } catch (error: any) {
-    if (error.code === "23505") {
-      return res
-        .status(409)
-        .json({ error: "Invite code collision, please try again" });
-    }
+  } catch (error) {
     console.error("POST /classes error:", error);
     res.status(500).json({ error: "Failed to create class" });
   }
@@ -129,8 +170,8 @@ router.get("/:id", async (req, res) => {
 
     const [classDetails] = await db
       .select({
-        ...getTableColumns(classes),
-        subject: { ...getTableColumns(subjects) },
+        ...publicClassColumns,
+        subject: { ...getSubjectColumns() },
         teacher: {
           id: user.id,
           name: user.name,
@@ -165,5 +206,17 @@ router.get("/:id", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch class details" });
   }
 });
+
+function getSubjectColumns() {
+  return {
+    id: subjects.id,
+    departmentId: subjects.departmentId,
+    name: subjects.name,
+    code: subjects.code,
+    description: subjects.description,
+    createdAt: subjects.createdAt,
+    updatedAt: subjects.updatedAt,
+  };
+}
 
 export default router;
