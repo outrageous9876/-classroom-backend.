@@ -11,6 +11,7 @@ import statsRouter from "./routes/stats.js";
 import enrollmentsRouter from "./routes/enrollments.js";
 
 import { auth } from "./lib/auth.js";
+import securityMiddleware from "./middleware/security.js";
 
 const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
@@ -26,6 +27,8 @@ app.use(
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json());
+
+app.use(securityMiddleware);
 
 app.use("/api/subjects", subjectsRouter);
 app.use("/api/users", usersRouter);
