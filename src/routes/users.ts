@@ -3,10 +3,27 @@ import { eq, ilike, or, and, desc, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { user } from "../db/schema/index.js";
+import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
-router.get("/", async (req, res) => {
+// Faculty & Users directory (GET /, GET /:id) is browsable by every
+// authenticated role, including students — the frontend has no role gate
+// on this page. Only admins/teachers get the email field in the response;
+// students see everything else (name, role, image, etc.) with email
+// stripped out.
+function stripEmailUnlessStaff<T extends { email: string }>(
+  record: T,
+  role: string | undefined
+): T | Omit<T, "email"> {
+  if (role === "admin" || role === "teacher") {
+    return record;
+  }
+  const { email, ...rest } = record;
+  return rest;
+}
+
+router.get("/", requireAuth, async (req, res) => {
   try {
     const { search, role, page = 1, limit = 10 } = req.query;
 
@@ -54,8 +71,12 @@ router.get("/", async (req, res) => {
       .limit(limitPerPage)
       .offset(offset);
 
+    const responseData = usersList.map((u) =>
+      stripEmailUnlessStaff(u, req.user!.role)
+    );
+
     res.status(200).json({
-      data: usersList,
+      data: responseData,
       pagination: {
         page: currentPage,
         limit: limitPerPage,
@@ -69,7 +90,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireAuth, async (req, res) => {
   try {
     const [foundUser] = await db
       .select({
@@ -84,13 +105,15 @@ router.get("/:id", async (req, res) => {
         updatedAt: user.updatedAt,
       })
       .from(user)
-      .where(eq(user.id, req.params.id));
+      .where(eq(user.id, String(req.params.id)));
 
     if (!foundUser) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    res.status(200).json({ data: foundUser });
+    res
+      .status(200)
+      .json({ data: stripEmailUnlessStaff(foundUser, req.user!.role) });
   } catch (error) {
     console.error("GET /users/:id error:", error);
     res.status(500).json({ error: "Failed to fetch user" });

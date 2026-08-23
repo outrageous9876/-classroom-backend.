@@ -32,12 +32,32 @@ user: {
       type: "string",
       required: false,
       defaultValue: "student",
-      input: false,  // changed from true
+      input: true,
     },
     imageCldPubId: {
       type: "string",
       required: false,
       input: true,
+    },
+  },
+},
+databaseHooks: {
+  user: {
+    create: {
+      before: async (user) => {
+        const submittedRole = (user as { role?: unknown }).role;
+        const role =
+          submittedRole === "student" || submittedRole === "teacher"
+            ? submittedRole
+            : "student";
+
+        return {
+          data: {
+            ...user,
+            role,
+          },
+        };
+      },
     },
   },
 },

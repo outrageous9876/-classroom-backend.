@@ -3,10 +3,11 @@ import { eq, ilike, desc, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { departments, subjects } from "../db/schema/index.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   try {
     const { search, page = 1, limit = 10 } = req.query;
 
@@ -48,7 +49,8 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+// Only logged-in admins can create a department.
+router.post("/", requireAuth, requireRole("admin"), async (req, res) => {
   try {
     const { code, name, description } = req.body;
 
@@ -73,7 +75,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireAuth, async (req, res) => {
   try {
     const departmentId = Number(req.params.id);
 
@@ -106,6 +108,31 @@ router.get("/:id", async (req, res) => {
   } catch (error) {
     console.error("GET /departments/:id error:", error);
     res.status(500).json({ error: "Failed to fetch department details" });
+  }
+});
+
+// Only logged-in admins can delete a department.
+router.delete("/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  try {
+    const departmentId = Number(req.params.id);
+
+    if (!Number.isFinite(departmentId)) {
+      return res.status(400).json({ error: "Invalid department id" });
+    }
+
+    const [deletedDepartment] = await db
+      .delete(departments)
+      .where(eq(departments.id, departmentId))
+      .returning({ id: departments.id });
+
+    if (!deletedDepartment) {
+      return res.status(404).json({ error: "Department not found" });
+    }
+
+    res.status(200).json({ data: deletedDepartment });
+  } catch (error) {
+    console.error("DELETE /departments/:id error:", error);
+    res.status(500).json({ error: "Failed to delete department" });
   }
 });
 

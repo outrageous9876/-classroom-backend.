@@ -4,6 +4,7 @@ import { eq, ilike, and, desc, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { classes, subjects, user, enrollments } from "../db/schema/index.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -112,7 +113,8 @@ function isUniqueViolation(error: any): boolean {
   return error?.code === "23505" || error?.cause?.code === "23505";
 }
 
-router.post("/", async (req, res) => {
+// Only logged-in teachers/admins can create a class.
+router.post("/", requireAuth, requireRole("teacher", "admin"), async (req, res) => {
   try {
     const {
       subjectId,
@@ -178,6 +180,48 @@ router.post("/", async (req, res) => {
   }
 });
 
+
+// A student joins a class using its invite code. The invite code is the
+// only way to discover the classId here — it is never exposed via list
+// endpoints, so this is the sole entry point for enrollment by code.
+router.post("/join", requireAuth, async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    if (!code || typeof code !== "string") {
+      return res.status(400).json({ error: "Invite code is required" });
+    }
+
+    const [foundClass] = await db
+      .select({ id: classes.id, name: classes.name })
+      .from(classes)
+      .where(eq(classes.inviteCode, code.trim().toUpperCase()));
+
+    if (!foundClass) {
+      return res.status(404).json({ error: "Invalid invite code" });
+    }
+
+    const studentId = req.user!.id!;
+
+    const [enrollment] = await db
+      .insert(enrollments)
+      .values({ studentId, classId: foundClass.id })
+      .returning({ id: enrollments.id });
+
+    if (!enrollment) throw new Error("Enrollment insert returned no result");
+
+    res.status(201).json({
+      data: { classId: foundClass.id, className: foundClass.name },
+    });
+  } catch (error: any) {
+    if (error.code === "23505" || error?.cause?.code === "23505") {
+      return res.status(409).json({ error: "You are already enrolled in this class" });
+    }
+    console.error("POST /classes/join error:", error);
+    res.status(500).json({ error: "Failed to join class" });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const classId = Number(req.params.id);
@@ -222,6 +266,199 @@ router.get("/:id", async (req, res) => {
   } catch (error) {
     console.error("GET /classes/:id error:", error);
     res.status(500).json({ error: "Failed to fetch class details" });
+  }
+});
+
+// Update a class. Only fields that make sense to edit after creation are
+// accepted — subjectId, teacherId, and inviteCode are intentionally NOT
+// editable here (changing the teacher/subject of an existing class with
+// enrollments would be a much bigger operation than a simple field edit).
+router.patch("/:id", requireAuth, async (req, res) => {
+  try {
+    const classId = Number(req.params.id);
+
+    if (!Number.isFinite(classId)) {
+      return res.status(400).json({ error: "Invalid class id" });
+    }
+
+    const [existingClass] = await db
+      .select({ teacherId: classes.teacherId })
+      .from(classes)
+      .where(eq(classes.id, classId));
+
+    if (!existingClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    if (
+      req.user!.role !== "admin" &&
+      existingClass.teacherId !== req.user!.id
+    ) {
+      return res
+        .status(403)
+        .json({ error: "You can only modify your own classes." });
+    }
+
+    const {
+      name,
+      description,
+      status,
+      capacity,
+      bannerUrl,
+      bannerCldPubId,
+      schedules,
+    } = req.body;
+
+    const [updatedClass] = await db
+      .update(classes)
+      .set({
+        name,
+        description,
+        status,
+        capacity,
+        bannerUrl,
+        bannerCldPubId,
+        schedules,
+        updatedAt: new Date(),
+      })
+      .where(eq(classes.id, classId))
+      .returning({ id: classes.id });
+
+    if (!updatedClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    res.status(200).json({ data: updatedClass });
+  } catch (error) {
+    console.error("PATCH /classes/:id error:", error);
+    res.status(500).json({ error: "Failed to update class" });
+  }
+});
+
+
+// List students enrolled in a class, with pagination. Restricted to the
+// class's owning teacher, an admin, or a student enrolled in the class —
+// the roster exposes every enrolled student's name/email, so it must not
+// be readable by arbitrary logged-in users.
+router.get("/:id/users", requireAuth, async (req, res) => {
+  try {
+    const classId = Number(req.params.id);
+    const { page = 1, limit = 10 } = req.query;
+
+    if (!Number.isFinite(classId)) {
+      return res.status(400).json({ error: "Invalid class id" });
+    }
+
+    const [existingClass] = await db
+      .select({ teacherId: classes.teacherId })
+      .from(classes)
+      .where(eq(classes.id, classId));
+
+    if (!existingClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    const isOwner = existingClass.teacherId === req.user!.id;
+    const isAdmin = req.user!.role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      const [ownEnrollment] = await db
+        .select({ id: enrollments.id })
+        .from(enrollments)
+        .where(
+          and(
+            eq(enrollments.classId, classId),
+            eq(enrollments.studentId, req.user!.id!)
+          )
+        );
+
+      if (!ownEnrollment) {
+        return res.status(403).json({ error: "Insufficient permissions" });
+      }
+    }
+
+    const currentPage = Math.max(1, +page);
+    const limitPerPage = Math.max(1, +limit);
+    const offset = (currentPage - 1) * limitPerPage;
+
+    const countResult = await db
+    .select({ count: sql<number>`count(*)` })      
+      .from(enrollments)
+      .where(eq(enrollments.classId, classId));
+
+    const totalCount = countResult[0]?.count ?? 0;
+
+    const studentsList = await db
+      .select({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        image: user.image,
+        role: user.role,
+      })
+      .from(enrollments)
+      .innerJoin(user, eq(enrollments.studentId, user.id))
+      .where(eq(enrollments.classId, classId))
+      .orderBy(desc(enrollments.createdAt))
+      .limit(limitPerPage)
+      .offset(offset);
+
+    res.status(200).json({
+      data: studentsList,
+      pagination: {
+        page: currentPage,
+        limit: limitPerPage,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / limitPerPage),
+      },
+    });
+  } catch (error) {
+    console.error("GET /classes/:id/users error:", error);
+    res.status(500).json({ error: "Failed to fetch enrolled students" });
+  }
+});
+
+
+// Only the owning teacher or an admin can delete a class.
+router.delete("/:id", requireAuth, async (req, res) => {
+  try {
+    const classId = Number(req.params.id);
+
+    if (!Number.isFinite(classId)) {
+      return res.status(400).json({ error: "Invalid class id" });
+    }
+
+    const [existingClass] = await db
+      .select({ teacherId: classes.teacherId })
+      .from(classes)
+      .where(eq(classes.id, classId));
+
+    if (!existingClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    if (
+      req.user!.role !== "admin" &&
+      existingClass.teacherId !== req.user!.id
+    ) {
+      return res
+        .status(403)
+        .json({ error: "You can only modify your own classes." });
+    }
+
+    const [deletedClass] = await db
+      .delete(classes)
+      .where(eq(classes.id, classId))
+      .returning({ id: classes.id });
+
+    if (!deletedClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    res.status(200).json({ data: { id: classId } });
+  } catch (error) {
+    console.error("DELETE /classes/:id error:", error);
+    res.status(500).json({ error: "Failed to delete class" });
   }
 });
 
