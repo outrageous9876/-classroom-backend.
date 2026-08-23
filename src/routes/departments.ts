@@ -7,7 +7,7 @@ import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   try {
     const { search, page = 1, limit = 10 } = req.query;
 
@@ -75,7 +75,7 @@ router.post("/", requireAuth, requireRole("admin"), async (req, res) => {
   }
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireAuth, async (req, res) => {
   try {
     const departmentId = Number(req.params.id);
 

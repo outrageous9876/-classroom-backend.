@@ -11,6 +11,10 @@ const GROQ_MODEL = "openai/gpt-oss-20b";
 // Fully optional on the frontend — this just pre-fills a form field.
 router.post("/generate-description", requireAuth, async (req, res) => {
   try {
+    if (!req.body || typeof req.body !== "object") {
+      return res.status(400).json({ error: "Request body is required" });
+    }
+
     const { type, name, context } = req.body;
 
     if (type !== "class" && type !== "subject") {
@@ -21,6 +25,22 @@ router.post("/generate-description", requireAuth, async (req, res) => {
 
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required" });
+    }
+
+    if (name.length > 200) {
+      return res
+        .status(400)
+        .json({ error: "name must be 200 characters or fewer" });
+    }
+
+    if (context !== undefined && typeof context !== "string") {
+      return res.status(400).json({ error: "context must be a string" });
+    }
+
+    if (typeof context === "string" && context.length > 500) {
+      return res
+        .status(400)
+        .json({ error: "context must be 500 characters or fewer" });
     }
 
     if (!process.env.GROQ_API_KEY) {

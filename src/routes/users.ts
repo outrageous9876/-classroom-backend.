@@ -3,10 +3,11 @@ import { eq, ilike, or, and, desc, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { user } from "../db/schema/index.js";
+import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   try {
     const { search, role, page = 1, limit = 10 } = req.query;
 
@@ -69,7 +70,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireAuth, async (req, res) => {
   try {
     const [foundUser] = await db
       .select({
@@ -84,7 +85,7 @@ router.get("/:id", async (req, res) => {
         updatedAt: user.updatedAt,
       })
       .from(user)
-      .where(eq(user.id, req.params.id));
+      .where(eq(user.id, String(req.params.id)));
 
     if (!foundUser) {
       return res.status(404).json({ error: "User not found" });

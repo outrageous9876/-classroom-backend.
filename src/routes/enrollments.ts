@@ -120,8 +120,8 @@ router.post("/", requireAuth, async (req, res) => {
   }
 });
 
-// A student can remove their own enrollment. Teachers/admins can remove
-// any enrollment (e.g. to manage a class roster).
+// A student can remove their own enrollment. A teacher can remove an
+// enrollment only for a class they own. Admins can remove any enrollment.
 router.delete("/:id", requireAuth, async (req, res) => {
   try {
     const enrollmentId = Number(req.params.id);
@@ -131,8 +131,12 @@ router.delete("/:id", requireAuth, async (req, res) => {
     }
 
     const [existing] = await db
-      .select({ studentId: enrollments.studentId })
+      .select({
+        studentId: enrollments.studentId,
+        classTeacherId: classes.teacherId,
+      })
       .from(enrollments)
+      .innerJoin(classes, eq(enrollments.classId, classes.id))
       .where(eq(enrollments.id, enrollmentId));
 
     if (!existing) {
@@ -140,9 +144,12 @@ router.delete("/:id", requireAuth, async (req, res) => {
     }
 
     const isOwner = existing.studentId === req.user!.id;
-    const isStaff = req.user!.role === "teacher" || req.user!.role === "admin";
+    const isAdmin = req.user!.role === "admin";
+    const isOwningTeacher =
+      req.user!.role === "teacher" &&
+      existing.classTeacherId === req.user!.id;
 
-    if (!isOwner && !isStaff) {
+    if (!isOwner && !isAdmin && !isOwningTeacher) {
       return res.status(403).json({ error: "Insufficient permissions" });
     }
 

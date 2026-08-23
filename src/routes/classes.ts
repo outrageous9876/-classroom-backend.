@@ -336,14 +336,45 @@ router.patch("/:id", requireAuth, async (req, res) => {
 });
 
 
-// List students enrolled in a class, with pagination.
-router.get("/:id/users", async (req, res) => {
+// List students enrolled in a class, with pagination. Restricted to the
+// class's owning teacher, an admin, or a student enrolled in the class —
+// the roster exposes every enrolled student's name/email, so it must not
+// be readable by arbitrary logged-in users.
+router.get("/:id/users", requireAuth, async (req, res) => {
   try {
     const classId = Number(req.params.id);
     const { page = 1, limit = 10 } = req.query;
 
     if (!Number.isFinite(classId)) {
       return res.status(400).json({ error: "Invalid class id" });
+    }
+
+    const [existingClass] = await db
+      .select({ teacherId: classes.teacherId })
+      .from(classes)
+      .where(eq(classes.id, classId));
+
+    if (!existingClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    const isOwner = existingClass.teacherId === req.user!.id;
+    const isAdmin = req.user!.role === "admin";
+
+    if (!isOwner && !isAdmin) {
+      const [ownEnrollment] = await db
+        .select({ id: enrollments.id })
+        .from(enrollments)
+        .where(
+          and(
+            eq(enrollments.classId, classId),
+            eq(enrollments.studentId, req.user!.id!)
+          )
+        );
+
+      if (!ownEnrollment) {
+        return res.status(403).json({ error: "Insufficient permissions" });
+      }
     }
 
     const currentPage = Math.max(1, +page);
