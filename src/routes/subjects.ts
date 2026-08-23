@@ -3,6 +3,7 @@ import { eq, ilike, or, and, desc, sql, getTableColumns } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { classes, departments, enrollments, subjects, user } from "../db/schema/index.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -72,7 +73,8 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+// Only logged-in teachers/admins can create a subject.
+router.post("/", requireAuth, requireRole("teacher", "admin"), async (req, res) => {
   try {
     const { departmentId, name, code, description } = req.body;
 
@@ -154,33 +156,33 @@ router.get("/:id/classes", async (req, res) => {
 
     const totalCount = countResult[0]?.count ?? 0;
 
-   const classesList = await db
-  .select({
-    id: classes.id,
-    subjectId: classes.subjectId,
-    teacherId: classes.teacherId,
-    name: classes.name,
-    description: classes.description,
-    status: classes.status,
-    capacity: classes.capacity,
-    bannerUrl: classes.bannerUrl,
-    bannerCldPubId: classes.bannerCldPubId,
-    schedules: classes.schedules,
-    createdAt: classes.createdAt,
-    updatedAt: classes.updatedAt,
-    teacher: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      image: user.image,
-    },
-  })
-  .from(classes)
-  .leftJoin(user, eq(classes.teacherId, user.id))
-  .where(eq(classes.subjectId, subjectId))
-  .orderBy(desc(classes.createdAt))
-  .limit(limitPerPage)
-  .offset(offset);
+    const classesList = await db
+      .select({
+        id: classes.id,
+        subjectId: classes.subjectId,
+        teacherId: classes.teacherId,
+        name: classes.name,
+        description: classes.description,
+        status: classes.status,
+        capacity: classes.capacity,
+        bannerUrl: classes.bannerUrl,
+        bannerCldPubId: classes.bannerCldPubId,
+        schedules: classes.schedules,
+        createdAt: classes.createdAt,
+        updatedAt: classes.updatedAt,
+        teacher: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          image: user.image,
+        },
+      })
+      .from(classes)
+      .leftJoin(user, eq(classes.teacherId, user.id))
+      .where(eq(classes.subjectId, subjectId))
+      .orderBy(desc(classes.createdAt))
+      .limit(limitPerPage)
+      .offset(offset);
 
     res.status(200).json({
       data: classesList,
@@ -289,6 +291,31 @@ router.get("/:id/users", async (req, res) => {
   } catch (error) {
     console.error("GET /subjects/:id/users error:", error);
     res.status(500).json({ error: "Failed to fetch subject users" });
+  }
+});
+
+// Only logged-in teachers/admins can delete a subject.
+router.delete("/:id", requireAuth, requireRole("teacher", "admin"), async (req, res) => {
+  try {
+    const subjectId = Number(req.params.id);
+
+    if (!Number.isFinite(subjectId)) {
+      return res.status(400).json({ error: "Invalid subject id" });
+    }
+
+    const [deletedSubject] = await db
+      .delete(subjects)
+      .where(eq(subjects.id, subjectId))
+      .returning({ id: subjects.id });
+
+    if (!deletedSubject) {
+      return res.status(404).json({ error: "Subject not found" });
+    }
+
+    res.status(200).json({ data: deletedSubject });
+  } catch (error) {
+    console.error("DELETE /subjects/:id error:", error);
+    res.status(500).json({ error: "Failed to delete subject" });
   }
 });
 

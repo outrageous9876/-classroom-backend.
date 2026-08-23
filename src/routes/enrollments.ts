@@ -1,10 +1,29 @@
 import express from "express";
-import { eq, and, desc, sql, getTableColumns } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { enrollments, classes, user } from "../db/schema/index.js";
+import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
+
+// Explicit projection — excludes inviteCode, same reasoning as classes.ts
+// and subjects.ts: it's an access credential, never returned in list/detail
+// responses.
+const publicClassColumns = {
+  id: classes.id,
+  subjectId: classes.subjectId,
+  teacherId: classes.teacherId,
+  name: classes.name,
+  description: classes.description,
+  status: classes.status,
+  capacity: classes.capacity,
+  bannerUrl: classes.bannerUrl,
+  bannerCldPubId: classes.bannerCldPubId,
+  schedules: classes.schedules,
+  createdAt: classes.createdAt,
+  updatedAt: classes.updatedAt,
+};
 
 router.get("/", async (req, res) => {
   try {
@@ -36,14 +55,18 @@ router.get("/", async (req, res) => {
 
     const enrollmentsList = await db
       .select({
-        ...getTableColumns(enrollments),
+        id: enrollments.id,
+        studentId: enrollments.studentId,
+        classId: enrollments.classId,
+        createdAt: enrollments.createdAt,
+        updatedAt: enrollments.updatedAt,
         student: {
           id: user.id,
           name: user.name,
           email: user.email,
           image: user.image,
         },
-        class: { ...getTableColumns(classes) },
+        class: { ...publicClassColumns },
       })
       .from(enrollments)
       .leftJoin(user, eq(enrollments.studentId, user.id))
@@ -68,9 +91,17 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+// A student enrolls themselves — studentId always comes from the
+// authenticated session, never from the request body. Trusting a
+// client-supplied studentId would let anyone enroll someone else.
+router.post("/", requireAuth, async (req, res) => {
   try {
-    const { studentId, classId } = req.body;
+    const studentId = req.user!.id!;
+    const { classId } = req.body;
+
+    if (!classId) {
+      return res.status(400).json({ error: "classId is required" });
+    }
 
     const [createdEnrollment] = await db
       .insert(enrollments)
@@ -80,13 +111,18 @@ router.post("/", async (req, res) => {
     if (!createdEnrollment) throw Error;
 
     res.status(201).json({ data: createdEnrollment });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.code === "23505" || error?.cause?.code === "23505") {
+      return res.status(409).json({ error: "Already enrolled in this class" });
+    }
     console.error("POST /enrollments error:", error);
     res.status(500).json({ error: "Failed to create enrollment" });
   }
 });
 
-router.delete("/:id", async (req, res) => {
+// A student can remove their own enrollment. Teachers/admins can remove
+// any enrollment (e.g. to manage a class roster).
+router.delete("/:id", requireAuth, async (req, res) => {
   try {
     const enrollmentId = Number(req.params.id);
 
@@ -94,7 +130,30 @@ router.delete("/:id", async (req, res) => {
       return res.status(400).json({ error: "Invalid enrollment id" });
     }
 
-    await db.delete(enrollments).where(eq(enrollments.id, enrollmentId));
+    const [existing] = await db
+      .select({ studentId: enrollments.studentId })
+      .from(enrollments)
+      .where(eq(enrollments.id, enrollmentId));
+
+    if (!existing) {
+      return res.status(404).json({ error: "Enrollment not found" });
+    }
+
+    const isOwner = existing.studentId === req.user!.id;
+    const isStaff = req.user!.role === "teacher" || req.user!.role === "admin";
+
+    if (!isOwner && !isStaff) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+
+    const [deleted] = await db
+      .delete(enrollments)
+      .where(eq(enrollments.id, enrollmentId))
+      .returning({ id: enrollments.id });
+
+    if (!deleted) {
+      return res.status(404).json({ error: "Enrollment not found" });
+    }
 
     res.status(200).json({ data: { id: enrollmentId } });
   } catch (error) {
